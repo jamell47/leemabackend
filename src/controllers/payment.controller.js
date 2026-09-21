@@ -1,6 +1,7 @@
 import prisma from '../config/prisma.js'
 import { AppError } from '../middleware/error.middleware.js'
 import paymentService from '../services/payment.service.js'
+import mpesaService from '../services/mpesa.service.js'
 
 export const initiateStkPush = async (req, res, next) => {
   try {
@@ -85,9 +86,9 @@ export const handleCallback = async (req, res, next) => {
   try {
     const callbackData = req.body
 
-    console.log('M-Pesa callback received:', JSON.stringify(callbackData, null, 2))
+    const parsedCallback = mpesaService.parseCallback(callbackData)
 
-    const result = await paymentService.processCallback(callbackData)
+    const result = await paymentService.processCallback(parsedCallback)
 
     // Always return success to Daraja to avoid retries
     res.json({

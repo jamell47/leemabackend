@@ -37,8 +37,17 @@ const getDarajaTimestamp = () => {
   return `${values.year}${values.month}${values.day}${values.hour}${values.minute}${values.second}`
 }
 
-export const generateStkPassword = (shortcode, passkey) => {
-  const timestamp = getDarajaTimestamp()
+const logDarajaError = (operation, error, context = {}) => {
+  if (config.nodeEnv !== 'development') return
+  const responseData = error.response?.data
+  console.error(`[M-Pesa ${operation} failed]`, {
+    httpStatus: error.response?.status || null,
+    darajaResponse: responseData || null,
+    ...context,
+  })
+}
+
+export const generateStkPassword = (shortcode, passkey, timestamp = getDarajaTimestamp()) => {
   return Buffer.from(`${shortcode}${timestamp}${passkey}`).toString('base64')
 }
 
@@ -62,6 +71,7 @@ export const getAccessToken = async () => {
     return accessToken
   } catch (error) {
     if (error instanceof AppError) throw error
+    logDarajaError('access token', error, { endpoint: urls.auth })
     if (error.response?.status === 401) {
       throw new AppError('M-Pesa authentication failed. Check credentials.', 500, 'MPESA_AUTH_FAILED')
     }
@@ -76,19 +86,24 @@ export const initiateStkPush = async ({ phone, amount, orderNumber, callbackUrl 
   if (!phoneValidation.valid) {
     throw new AppError(phoneValidation.error, 400, 'INVALID_PHONE')
   }
-  if (!Number.isFinite(Number(amount)) || Number(amount) <= 0) {
-    throw new AppError('Payment amount is invalid', 400, 'INVALID_AMOUNT')
+  const paymentAmount = Number(amount)
+  if (!Number.isInteger(paymentAmount) || paymentAmount <= 0) {
+    throw new AppError('Payment amount must be a positive integer', 400, 'INVALID_AMOUNT')
   }
+  if (!config.mpesa.shortcode || !config.mpesa.passkey || !config.mpesa.transactionType || !(callbackUrl || config.mpesa.callbackUrl)) {
+    throw new AppError('M-Pesa configuration is incomplete', 500, 'MPESA_CONFIG_ERROR')
+  }
+  if (!orderNumber) throw new AppError('Order number is required', 400, 'INVALID_ORDER')
 
   const urls = getDarajaUrls()
   const token = await getAccessToken()
   const timestamp = getDarajaTimestamp()
   const payload = {
     BusinessShortCode: config.mpesa.shortcode,
-    Password: generateStkPassword(config.mpesa.shortcode, config.mpesa.passkey),
+    Password: generateStkPassword(config.mpesa.shortcode, config.mpesa.passkey, timestamp),
     Timestamp: timestamp,
     TransactionType: config.mpesa.transactionType,
-    Amount: Math.round(Number(amount)),
+    Amount: paymentAmount,
     PartyA: normalizePhoneForDaraja(phoneValidation.normalized),
     PartyB: config.mpesa.shortcode,
     PhoneNumber: normalizePhoneForDaraja(phoneValidation.normalized),
@@ -105,22 +120,28 @@ export const initiateStkPush = async ({ phone, amount, orderNumber, callbackUrl 
       },
     })
     const data = response.data || {}
+    const checkoutRequestId = data.CheckoutRequestID || data.CheckoutRequestId || null
     return {
-      success: data.ResponseCode === '0' && Boolean(data.CheckoutRequestID),
-      merchantRequestId: data.MerchantRequestId || null,
-      checkoutRequestId: data.CheckoutRequestId || null,
+      success: data.ResponseCode === '0' && Boolean(checkoutRequestId),
+      merchantRequestId: data.MerchantRequestID || data.MerchantRequestId || null,
+      checkoutRequestId,
       responseCode: data.ResponseCode || null,
-      responseDescription: data.ResponseDescription || (data.CheckoutRequestID ? 'M-Pesa request accepted' : 'M-Pesa did not return a checkout request ID.'),
+      responseDescription: data.ResponseDescription || (checkoutRequestId ? 'M-Pesa request accepted' : 'M-Pesa did not return a checkout request ID.'),
     }
   } catch (error) {
+    logDarajaError('STK Push', error, {
+      endpoint: urls.stk,
+      shortcode: config.mpesa.shortcode,
+      transactionType: config.mpesa.transactionType,
+      amount: paymentAmount,
+      phone: phoneValidation.normalized,
+      orderNumber,
+      callbackUrl: callbackUrl || config.mpesa.callbackUrl,
+    })
     if (error.response?.status === 401) {
       throw new AppError('M-Pesa authentication expired. Please try again.', 500, 'MPESA_AUTH_FAILED')
     }
-    throw new AppError(
-      error.response?.data?.errorMessage || 'Failed to initiate M-Pesa payment. Please try again.',
-      503,
-      'MPESA_STK_FAILED',
-    )
+    throw new AppError('Failed to initiate M-Pesa payment. Please try again.', 503, 'MPESA_STK_FAILED')
   }
 }
 
@@ -147,7 +168,7 @@ export const parseCallback = (callbackData) => {
 
   return {
     merchantRequestId: stkCallback.MerchantRequestID || null,
-    checkoutRequestId: stkCallback.CheckoutRequestID || null,
+    checkoutRequestId: stkCallback.CheckoutRequestID || stkCallback.CheckoutRequestId || null,
     responseCode: stkCallback.ResponseCode == null ? null : String(stkCallback.ResponseCode),
     resultCode: stkCallback.ResultCode == null ? null : String(stkCallback.ResultCode),
     resultDescription: stkCallback.ResultDesc || 'M-Pesa callback received',
