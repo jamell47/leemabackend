@@ -18,8 +18,7 @@ const DARAJA_URLS = {
 }
 
 const getDarajaUrls = () => {
-  const environment = config.mpesa.environment || 'sandbox'
-  return DARAJA_URLS[environment] || DARAJA_URLS.sandbox
+  return DARAJA_URLS.sandbox
 }
 
 const getDarajaTimestamp = () => {
@@ -90,8 +89,11 @@ export const initiateStkPush = async ({ phone, amount, orderNumber, callbackUrl 
   if (!Number.isInteger(paymentAmount) || paymentAmount <= 0) {
     throw new AppError('Payment amount must be a positive integer', 400, 'INVALID_AMOUNT')
   }
-  if (!config.mpesa.shortcode || !config.mpesa.passkey || !config.mpesa.transactionType || !(callbackUrl || config.mpesa.callbackUrl)) {
+  if (!config.mpesa.shortcode || !config.mpesa.passkey || !(callbackUrl || config.mpesa.callbackUrl)) {
     throw new AppError('M-Pesa configuration is incomplete', 500, 'MPESA_CONFIG_ERROR')
+  }
+  if (config.mpesa.transactionType !== 'CustomerPayBillOnline') {
+    throw new AppError('M-Pesa sandbox transaction type must be CustomerPayBillOnline', 500, 'MPESA_CONFIG_ERROR')
   }
   if (!orderNumber) throw new AppError('Order number is required', 400, 'INVALID_ORDER')
 
@@ -179,7 +181,7 @@ export const parseCallback = (callbackData) => {
 }
 
 export const getCallbackStatus = (callback) => {
-  const resultCode = String(callback?.resultCode || '')
+  const resultCode = String(callback?.resultCode ?? '')
   if (resultCode === '0') {
     return { paymentStatus: 'SUCCESS', orderStatus: 'PAID', message: 'Payment successful' }
   }

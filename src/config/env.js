@@ -9,6 +9,17 @@ const __dirname = path.dirname(__filename)
 // Load .env file
 dotenv.config({ path: path.resolve(__dirname, '..', '..', '.env') })
 
+const cleanEnvValue = (value) => {
+  if (value == null) return value
+  const trimmed = String(value).trim()
+  if (trimmed.length >= 2 && ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'")))) {
+    return trimmed.slice(1, -1).trim()
+  }
+  return trimmed
+}
+
+const env = (name) => cleanEnvValue(process.env[name])
+
 // Validate required environment variables
 const requiredEnvVars = [
   'PORT',
@@ -23,16 +34,21 @@ const requiredEnvVars = [
   'FRONTEND_URL',
 ]
 
-const missingVars = requiredEnvVars.filter((varName) => !process.env[varName])
+const missingVars = requiredEnvVars.filter((varName) => !env(varName))
 
-if (missingVars.length > 0 && process.env.NODE_ENV === 'production') {
+if (env('MPESA_ENVIRONMENT') && env('MPESA_ENVIRONMENT') !== 'sandbox') {
+  console.error('M-Pesa STK Push is restricted to the sandbox environment.')
+  process.exit(1)
+}
+
+if (missingVars.length > 0 && env('NODE_ENV') === 'production') {
   console.error('❌ Missing required environment variables:')
   missingVars.forEach((varName) => console.error(`   - ${varName}`))
   process.exit(1)
 }
 
 // Validate M-Pesa credentials in non-sandbox mode
-if (process.env.MPESA_ENVIRONMENT !== 'sandbox') {
+if (env('MPESA_ENVIRONMENT') !== 'sandbox') {
   const mpesaVars = ['MPESA_CONSUMER_KEY', 'MPESA_CONSUMER_SECRET', 'MPESA_SHORTCODE', 'MPESA_PASSKEY']
   const missingMpesa = mpesaVars.filter((v) => !process.env[v] || process.env[v].includes('YOUR_'))
 
@@ -43,24 +59,24 @@ if (process.env.MPESA_ENVIRONMENT !== 'sandbox') {
 
 // Export configuration object
 export const config = {
-  port: parseInt(process.env.PORT, 10) || 4000,
-  nodeEnv: process.env.NODE_ENV || 'development',
-  databaseUrl: process.env.DATABASE_URL,
-  jwtSecret: process.env.JWT_SECRET,
-  jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',
-  frontendUrl: process.env.FRONTEND_URL,
+  port: parseInt(env('PORT'), 10) || 4000,
+  nodeEnv: env('NODE_ENV') || 'development',
+  databaseUrl: env('DATABASE_URL'),
+  jwtSecret: env('JWT_SECRET'),
+  jwtExpiresIn: env('JWT_EXPIRES_IN') || '7d',
+  frontendUrl: env('FRONTEND_URL'),
   mpesa: {
-    environment: process.env.MPESA_ENVIRONMENT || 'sandbox',
-    consumerKey: process.env.MPESA_CONSUMER_KEY,
-    consumerSecret: process.env.MPESA_CONSUMER_SECRET,
-    shortcode: process.env.MPESA_SHORTCODE,
-    passkey: process.env.MPESA_PASSKEY,
-    transactionType: process.env.MPESA_TRANSACTION_TYPE || 'CustomerPayBillOnline',
-    callbackUrl: process.env.MPESA_CALLBACK_URL,
+    environment: 'sandbox',
+    consumerKey: env('MPESA_CONSUMER_KEY'),
+    consumerSecret: env('MPESA_CONSUMER_SECRET'),
+    shortcode: env('MPESA_SHORTCODE'),
+    passkey: env('MPESA_PASSKEY'),
+    transactionType: env('MPESA_TRANSACTION_TYPE') || 'CustomerPayBillOnline',
+    callbackUrl: env('MPESA_CALLBACK_URL'),
   },
   upload: {
-    maxFileSize: parseInt(process.env.MAX_FILE_SIZE, 10) || 5 * 1024 * 1024, // 5MB default
-    allowedTypes: (process.env.ALLOWED_FILE_TYPES || 'image/jpeg,image/png,image/webp')
+    maxFileSize: parseInt(env('MAX_FILE_SIZE'), 10) || 5 * 1024 * 1024, // 5MB default
+    allowedTypes: (env('ALLOWED_FILE_TYPES') || 'image/jpeg,image/png,image/webp')
       .split(',')
       .map((t) => t.trim()),
   },
