@@ -26,8 +26,29 @@ app.use(helmet({
 }))
 
 // CORS configuration
+const allowedOrigins = (process.env.CORS_ORIGINS || config.frontendUrl)
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean)
+
+// In development also allow common localhost dev servers
+if (config.nodeEnv !== 'production') {
+  allowedOrigins.push(
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:3000',
+  )
+}
+
 const corsOptions = {
-  origin: config.frontendUrl,
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true)
+    } else {
+      callback(new Error('Not allowed by CORS'))
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Session-ID'],
