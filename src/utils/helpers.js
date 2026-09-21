@@ -12,11 +12,11 @@ export const generateToken = (userId) => {
 
 /**
  * Generate unique order number
- * Format: LEEMA-ORD-XXXXX
+ * Format: LEEMA-ORD-XXXXXXXXX
  */
 export const generateOrderNumber = () => {
-  const timestamp = Date.now().toString().slice(-5)
-  const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0')
+  const timestamp = Date.now().toString(36).toUpperCase()
+  const random = Math.random().toString(36).substring(2, 8).toUpperCase()
   return `LEEMA-ORD-${timestamp}${random}`
 }
 
@@ -24,7 +24,7 @@ export const generateOrderNumber = () => {
  * Normalize Kenyan phone number to 2547XXXXXXXX format
  * Handles:
  * - 0712345678 -> 254712345678
- * - 0112345678 -> 254712345678
+ * - 0112345678 -> 254112345678
  * - 254712345678 -> 254712345678
  * - +254712345678 -> 254712345678
  */
@@ -36,14 +36,20 @@ export const normalizeKenyanPhone = (phone) => {
 
   // Handle different formats
   if (digits.startsWith('254')) {
-    // Already in 254 format, ensure it's 12 digits
-    return digits.length === 12 ? digits : ''
+    // Already in 254 format, ensure it's 12 digits and valid prefix (2547 or 2541)
+    if (digits.length === 12 && (digits.startsWith('2547') || digits.startsWith('2541'))) {
+      return digits
+    }
+    return ''
   }
 
   if (digits.startsWith('0')) {
-    // Convert 07XX... to 2547XX...
+    // Convert 07XX... to 2547XX... or 01XX... to 2541XX...
     if (digits.length === 10) {
-      return `254${digits.slice(1)}`
+      const prefix = digits.slice(1, 2)
+      if (prefix === '7' || prefix === '1') {
+        return `254${digits.slice(1)}`
+      }
     }
     return ''
   }
@@ -84,7 +90,8 @@ export const formatCurrency = (amount, currency = 'KES') => {
     style: 'currency',
     currency,
     maximumFractionDigits: 0,
-  }).format(amount)
+    currencyDisplay: 'symbol',
+  }).format(amount).replace('KES', 'KSh')
 }
 
 /**

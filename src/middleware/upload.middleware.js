@@ -13,11 +13,12 @@ if (!existsSync(uploadsDir)) {
 
 /**
  * File filter for product images
- * Only allow JPG, JPEG, PNG, WEBP
+ * Only allow JPG, JPEG, PNG, WEBP with strict validation
  */
 const fileFilter = (req, file, cb) => {
   // Check MIME type
-  if (!config.upload.allowedTypes.includes(file.mimetype)) {
+  const allowedMimeTypes = ['image/jpeg', 'image/png', 'image/webp']
+  if (!allowedMimeTypes.includes(file.mimetype)) {
     return cb(new AppError('Invalid file type. Allowed: JPG, JPEG, PNG, WEBP.', 400, 'INVALID_FILE_TYPE'), false)
   }
 
@@ -27,6 +28,11 @@ const fileFilter = (req, file, cb) => {
 
   if (!allowedExts.includes(ext)) {
     return cb(new AppError('Invalid file extension. Allowed: .jpg, .jpeg, .png, .webp', 400, 'INVALID_FILE_TYPE'), false)
+  }
+
+  // Validate file size (additional check beyond multer limits)
+  if (file.size && file.size > config.upload.maxFileSize) {
+    return cb(new AppError(`File too large. Maximum size is ${config.upload.maxFileSize / (1024 * 1024)}MB.`, 400, 'FILE_TOO_LARGE'), false)
   }
 
   cb(null, true)
@@ -53,7 +59,7 @@ export const uploadSingleImage = multer({
   storage,
   fileFilter,
   limits: {
-    fileSize: config.upload.maxFileSize, // 5MB default
+    fileSize: config.upload.maxFileSize,
   },
 }).single('image')
 
@@ -65,7 +71,7 @@ export const uploadMultipleImages = multer({
   fileFilter,
   limits: {
     fileSize: config.upload.maxFileSize,
-    files: 5, // Max 5 images
+    files: 5,
   },
 }).array('images', 5)
 
@@ -73,20 +79,54 @@ export const uploadMultipleImages = multer({
  * Helper to get image URL
  */
 export const getImageUrl = (filename) => {
-  // In development, serve from local uploads folder
-  // In production, this could be a CDN URL
+  if (!filename) return null
   if (config.nodeEnv === 'production') {
-    // TODO: Update with your production CDN/domain
-    return `/uploads/${filename}`
+    // In production, use CDN or full URL
+    return `${config.frontendUrl}/uploads/${filename}`
   }
-  // Development: return full path for local serving
   return `/api/uploads/${filename}`
 }
 
 /**
- * Middleware to serve uploaded files in development
+ * Helper to get multiple image URLs
+ */
+export const getImageUrls = (filenames) => {
+  if (!filenames || !Array.isArray(filenames)) return []
+  return filenames.map(getImageUrl).filter(Boolean)
+}
+
+/**
+ * Middleware to serve uploaded files in development with proper MIME types
  */
 export const serveUploads = (req, res, next) => {
   // This will be added to the express app
   next()
+}
+
+/**
+ * Validate file type from buffer (for additional security)
+ */
+export const validateFileBuffer = (buffer, mimetype) => {
+  // Basic magic number validation for images
+  if (!buffer || buffer.length < 4) {
+    return { valid: false, error: 'Invalid file: too small' }
+  }
+
+  const signatures = {
+    'image/jpeg': [0xFF, 0xD8, 0xFF],
+    'image/png': [0x89, 0x50, 0x4E, 0x47],
+    'image/webp': [0x52, 0x49, 0x46, 0x46], // RIFF header for WebP
+  }
+
+  const expectedSig = signatures[mimetype]
+  if (!expectedSig) {
+    return { valid: false, error: `Unsupported MIME type: ${mimetype}` }
+  }
+
+  const matches = expectedSig.every((byte, index) => buffer[index] === byte)
+  if (!matches) {
+    return { valid: false, error: `File signature does not match ${mimetype}` }
+  }
+
+  return { valid: true, error: null }
 }

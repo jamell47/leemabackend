@@ -44,7 +44,7 @@ model Category {
 
 model Product {
   id              String    @id @default(uuid())
-  name            String
+  name            String    @unique
   description     String
   price           Float
   unit            String
@@ -80,6 +80,7 @@ model Cart {
   updatedAt DateTime @updatedAt
   user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
   items     CartItem[]
+  session   Session?
 }
 
 model CartItem {
