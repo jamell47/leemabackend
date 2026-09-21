@@ -18,23 +18,19 @@ const DARAJA_URLS = {
 }
 
 const getDarajaUrls = () => {
-  const env = config.mpesa.environment || 'sandbox'
-  return DARAJA_URLS[env] || DARAJA_URLS.sandbox
+  const environment = config.mpesa.environment || 'sandbox'
+  return DARAJA_URLS[environment] || DARAJA_URLS.sandbox
 }
 
 export const generateStkPassword = (shortcode, passkey) => {
-  const timestamp = new Date().toISOString().replace(/[-\:T.]/g, '').slice(0, 14)
-  const password = shortcode + timestamp + passkey
-  return Buffer.from(password).toString('base64')
+  const timestamp = new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14)
+  return Buffer.from(`${shortcode}${timestamp}${passkey}`).toString('base64')
 }
 
 export const getAccessToken = async () => {
-  if (accessToken && Date.now() < tokenExpiry - 5 * 60 * 1000) {
-    return accessToken
-  }
+  if (accessToken && Date.now() < tokenExpiry - 5 * 60 * 1000) return accessToken
 
   const urls = getDarajaUrls()
-
   try {
     const response = await axios.get(urls.auth, {
       auth: {
@@ -43,12 +39,14 @@ export const getAccessToken = async () => {
       },
       headers: { 'Content-Type': 'application/json' },
     })
-
+    if (!response.data?.access_token) {
+      throw new AppError('M-Pesa authentication response was invalid.', 500, 'MPESA_AUTH_FAILED')
+    }
     accessToken = response.data.access_token
-    tokenExpiry = Date.now() + (response.data.expires_in * 1000)
+    tokenExpiry = Date.now() + (Number(response.data.expires_in) || 3500) * 1000
     return accessToken
   } catch (error) {
-    console.error('M-Pesa OAuth error:', error.response?.data || error.message)
+    if (error instanceof AppError) throw error
     if (error.response?.status === 401) {
       throw new AppError('M-Pesa authentication failed. Check credentials.', 500, 'MPESA_AUTH_FAILED')
     }
@@ -56,133 +54,105 @@ export const getAccessToken = async () => {
   }
 }
 
-/**
- * Normalize phone for Daraja STK Push
- * Daraja expects format: 07XXXXXXXX or 01XXXXXXXX (10 digits starting with 0)
- * We receive 2547XXXXXXXX or 2541XXXXXXXX (12 digits starting with 254)
- */
-const normalizePhoneForDaraja = (phone254) => {
-  // Convert 2547XXXXXXXX -> 07XXXXXXXX
-  // Convert 2541XXXXXXXX -> 01XXXXXXXX
-  if (phone254.startsWith('254')) {
-    return '0' + phone254.slice(3)
-  }
-  return phone254
-}
+const normalizePhoneForDaraja = (phone254) => (
+  phone254.startsWith('254') ? `0${phone254.slice(3)}` : phone254
+)
 
 export const initiateStkPush = async ({ phone, amount, orderNumber, callbackUrl = null }) => {
   const phoneValidation = validateKenyanPhone(phone)
   if (!phoneValidation.valid) {
     throw new AppError(phoneValidation.error, 400, 'INVALID_PHONE')
   }
+  if (!Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+    throw new AppError('Payment amount is invalid', 400, 'INVALID_AMOUNT')
+  }
 
-  // phoneValidation.normalized is in 2547XXXXXXXX format
-  // Daraja needs 07XXXXXXXX format
-  const darajaPhone = normalizePhoneForDaraja(phoneValidation.normalized)
   const urls = getDarajaUrls()
-  const accessToken = await getAccessToken()
-  const password = generateStkPassword(config.mpesa.shortcode, config.mpesa.passkey)
-
-  // Use CustomerPayBillOnline exactly as required
-  const transactionType = 'CustomerPayBillOnline'
-
+  const token = await getAccessToken()
+  const timestamp = new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14)
   const payload = {
     BusinessShortCode: config.mpesa.shortcode,
-    Password: password,
-    Timestamp: new Date().toISOString().replace(/[-\:T.]/g, '').slice(0, 14),
-    TransactionType: transactionType,
-    Amount: Math.round(amount), // Amount must be integer
-    PartyA: darajaPhone,
+    Password: generateStkPassword(config.mpesa.shortcode, config.mpesa.passkey),
+    Timestamp: timestamp,
+    TransactionType: 'CustomerPayBillOnline',
+    Amount: Math.round(Number(amount)),
+    PartyA: normalizePhoneForDaraja(phoneValidation.normalized),
     PartyB: config.mpesa.shortcode,
-    PhoneNumber: darajaPhone,
+    PhoneNumber: normalizePhoneForDaraja(phoneValidation.normalized),
     CallBackURL: callbackUrl || config.mpesa.callbackUrl,
     AccountReference: orderNumber,
     TransactionDesc: 'Leema Farm Order',
   }
 
-  console.log('M-Pesa STK Push:', { phone: darajaPhone, amount: Math.round(amount), orderNumber, transactionType })
-
   try {
     const response = await axios.post(urls.stk, payload, {
       headers: {
         'Content-Type': 'application/json',
-        Authorization: 'Bearer ' + accessToken,
+        Authorization: `Bearer ${token}`,
       },
     })
-
-    const stkData = response.data
+    const data = response.data || {}
     return {
-      success: stkData.ResponseCode === '0',
-      merchantRequestId: stkData.MerchantRequestId,
-      checkoutRequestId: stkData.CheckoutRequestId,
-      responseCode: stkData.ResponseCode,
-      responseDescription: stkData.ResponseDescription,
+      success: data.ResponseCode === '0',
+      merchantRequestId: data.MerchantRequestId || null,
+      checkoutRequestId: data.CheckoutRequestId || null,
+      responseCode: data.ResponseCode || null,
+      responseDescription: data.ResponseDescription || 'M-Pesa request accepted',
     }
   } catch (error) {
-    console.error('M-Pesa STK Push error:', error.response?.data || error.message)
     if (error.response?.status === 401) {
       throw new AppError('M-Pesa authentication expired. Please try again.', 500, 'MPESA_AUTH_FAILED')
     }
-    throw new AppError('Failed to initiate M-Pesa payment. Please try again.', 503, 'MPESA_STK_FAILED')
+    throw new AppError(
+      error.response?.data?.errorMessage || 'Failed to initiate M-Pesa payment. Please try again.',
+      503,
+      'MPESA_STK_FAILED',
+    )
   }
 }
 
 export const parseCallback = (callbackData) => {
-  const { Body } = callbackData
-  if (!Body) throw new AppError('Invalid callback: missing Body', 400, 'INVALID_CALLBACK')
+  const stkCallback = callbackData?.Body?.stkCallback
+  if (!stkCallback) {
+    throw new AppError('Invalid callback: missing stkCallback', 400, 'INVALID_CALLBACK')
+  }
 
-  const { stkCallback } = Body
-  if (!stkCallback) throw new AppError('Invalid callback: missing stkCallback', 400, 'INVALID_CALLBACK')
+  const metadata = {}
+  for (const item of stkCallback.CallbackMetadata?.Item || []) {
+    if (item?.Name) metadata[item.Name] = item.Value
+  }
 
-  const { MerchantRequestID, CheckoutRequestID, ResponseCode, ResultCode, ResultDesc, CallbackMetadata } = stkCallback
-
-  let receiptNumber = null
+  const transactionDateValue = metadata.TransactionDate
   let transactionDate = null
-  let amount = null
-
-  if (CallbackMetadata?.Item) {
-    const metadata = {}
-    CallbackMetadata.Item.forEach((item) => {
-      metadata[item.Name] = item.Value
-    })
-    receiptNumber = metadata.MerchantReceiptNumber || null
-    transactionDate = metadata.TransactionDate ? new Date(metadata.TransactionDate * 1000) : null
-    amount = metadata.Amount || null
+  if (transactionDateValue) {
+    const value = String(transactionDateValue)
+    const parsed = /^\d{14}$/.test(value)
+      ? new Date(`${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}T${value.slice(8, 10)}:${value.slice(10, 12)}:${value.slice(12, 14)}Z`)
+      : new Date(Number(value) * 1000)
+    transactionDate = Number.isNaN(parsed.getTime()) ? null : parsed
   }
 
   return {
-    merchantRequestId: MerchantRequestID,
-    checkoutRequestId: CheckoutRequestID,
-    responseCode: ResponseCode,
-    resultCode: ResultCode,
-    resultDescription: ResultDesc,
-    receiptNumber,
+    merchantRequestId: stkCallback.MerchantRequestID || null,
+    checkoutRequestId: stkCallback.CheckoutRequestID || null,
+    responseCode: stkCallback.ResponseCode == null ? null : String(stkCallback.ResponseCode),
+    resultCode: stkCallback.ResultCode == null ? null : String(stkCallback.ResultCode),
+    resultDescription: stkCallback.ResultDesc || 'M-Pesa callback received',
+    receiptNumber: metadata.MpesaReceiptNumber || metadata.MerchantReceiptNumber || null,
     transactionDate,
-    amount,
+    amount: metadata.Amount == null ? null : Number(metadata.Amount),
   }
 }
 
-export const getCallbackStatus = (callbackData) => {
-  const { resultCode, responseCode } = callbackData
-
-  // ResponseCode '0' means STK push was accepted, but ResultCode determines actual payment result
-  // ResultCode '0' = Success
-  // ResultCode '1032' = Cancelled by user
-  // ResultCode '1037' = Timeout
-  // Other ResultCodes = Failed
+export const getCallbackStatus = (callback) => {
+  const resultCode = String(callback?.resultCode || '')
   if (resultCode === '0') {
     return { paymentStatus: 'SUCCESS', orderStatus: 'PAID', message: 'Payment successful' }
   }
-
   if (resultCode === '1032' || resultCode === '1033') {
-    return { paymentStatus: 'CANCELLED', orderStatus: 'CANCELLED', message: 'Payment cancelled by user' }
+    return { paymentStatus: 'CANCELLED', orderStatus: 'PAYMENT_PENDING', message: 'Payment cancelled by customer' }
   }
-
-  if (resultCode === '1037') {
-    return { paymentStatus: 'FAILED', orderStatus: 'CANCELLED', message: 'Payment timed out' }
-  }
-
-  return { paymentStatus: 'FAILED', orderStatus: 'CANCELLED', message: callbackData.resultDescription || 'Payment failed' }
+  return { paymentStatus: 'FAILED', orderStatus: 'PAYMENT_PENDING', message: callback?.resultDescription || 'Payment failed' }
 }
 
 export const refreshAccessToken = async () => {

@@ -21,11 +21,13 @@ model User {
   updatedAt DateTime @updatedAt
   cart      Cart?
   orders    Order[]
+  deliveryPerson DeliveryPerson?
 }
 
 enum Role {
   CUSTOMER
   ADMIN
+  DELIVERY_PERSON
 }
 
 model Category {
@@ -102,12 +104,15 @@ model Order {
   totalAmount   Float
   status        OrderStatus @default(PENDING)
   deliveryFee   Float       @default(0)
+  deliveryAddress String?
+  deliveryNotes  String?
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
   user          User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
   userId        String?
   items         OrderItem[]
   payment       Payment?
+  delivery      Delivery?
   @@index([userId])
   @@index([status])
   @@index([createdAt])
@@ -192,4 +197,79 @@ model ContactSubmission {
   updatedAt DateTime @updatedAt
   @@index([createdAt])
   @@index([email])
+}
+
+model DeliveryPerson {
+  id                String   @id @default(uuid())
+  userId            String   @unique
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vehicleType       String?
+  vehicleRegistration String?
+  deliveryArea      String?
+  availability      DeliveryAvailability @default(AVAILABLE)
+  status            DeliveryPersonStatus @default(ACTIVE)
+  profilePhoto      String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  deliveries        Delivery[]
+  @@index([availability])
+  @@index([status])
+}
+
+enum DeliveryAvailability {
+  AVAILABLE
+  BUSY
+  OFF_DUTY
+}
+
+enum DeliveryPersonStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+model Delivery {
+  id              String        @id @default(uuid())
+  orderId         String        @unique
+  order           Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  deliveryPersonId String?
+  deliveryPerson  DeliveryPerson? @relation(fields: [deliveryPersonId], references: [id], onDelete: SetNull)
+  status          DeliveryStatus @default(UNASSIGNED)
+  address         String?
+  notes           String?
+  assignedAt      DateTime?
+  pickedUpAt      DateTime?
+  inTransitAt     DateTime?
+  deliveredAt     DateTime?
+  failedAt        DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  @@index([deliveryPersonId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+enum DeliveryStatus {
+  UNASSIGNED
+  ASSIGNED
+  PICKED_UP
+  IN_TRANSIT
+  DELIVERED
+  FAILED
+  CANCELLED
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  title     String
+  message   String
+  data      String?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([userId])
+  @@index([read])
+  @@index([createdAt])
 }
