@@ -36,11 +36,6 @@ const requiredEnvVars = [
 
 const missingVars = requiredEnvVars.filter((varName) => !env(varName))
 
-if (env('MPESA_ENVIRONMENT') && env('MPESA_ENVIRONMENT') !== 'sandbox') {
-  console.error('M-Pesa STK Push is restricted to the sandbox environment.')
-  process.exit(1)
-}
-
 if (missingVars.length > 0 && env('NODE_ENV') === 'production') {
   console.error('❌ Missing required environment variables:')
   missingVars.forEach((varName) => console.error(`   - ${varName}`))
@@ -66,7 +61,7 @@ export const config = {
   jwtExpiresIn: env('JWT_EXPIRES_IN') || '7d',
   frontendUrl: env('FRONTEND_URL'),
   mpesa: {
-    environment: 'sandbox',
+    environment: env('MPESA_ENVIRONMENT') || 'sandbox',
     consumerKey: env('MPESA_CONSUMER_KEY'),
     consumerSecret: env('MPESA_CONSUMER_SECRET'),
     shortcode: env('MPESA_SHORTCODE'),

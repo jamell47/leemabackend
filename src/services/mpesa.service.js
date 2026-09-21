@@ -18,7 +18,10 @@ const DARAJA_URLS = {
 }
 
 const getDarajaUrls = () => {
-  return DARAJA_URLS.sandbox
+  const environment = config.mpesa.environment
+  const urls = DARAJA_URLS[environment]
+  if (!urls) throw new AppError('Unsupported M-Pesa environment.', 500, 'MPESA_CONFIG_ERROR')
+  return urls
 }
 
 const getDarajaTimestamp = () => {
@@ -92,8 +95,11 @@ export const initiateStkPush = async ({ phone, amount, orderNumber, callbackUrl 
   if (!config.mpesa.shortcode || !config.mpesa.passkey || !(callbackUrl || config.mpesa.callbackUrl)) {
     throw new AppError('M-Pesa configuration is incomplete', 500, 'MPESA_CONFIG_ERROR')
   }
+  if (!['sandbox', 'production'].includes(config.mpesa.environment)) {
+    throw new AppError('M-Pesa environment must be sandbox or production', 500, 'MPESA_CONFIG_ERROR')
+  }
   if (config.mpesa.transactionType !== 'CustomerPayBillOnline') {
-    throw new AppError('M-Pesa sandbox transaction type must be CustomerPayBillOnline', 500, 'MPESA_CONFIG_ERROR')
+    throw new AppError('M-Pesa PayBill transaction type must be CustomerPayBillOnline', 500, 'MPESA_CONFIG_ERROR')
   }
   if (!orderNumber) throw new AppError('Order number is required', 400, 'INVALID_ORDER')
 
