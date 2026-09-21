@@ -1,0 +1,202 @@
+const fs = require('fs');
+const path = require('path');
+
+const schema = `// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  name      String
+  email     String   @unique
+  phone     String   @unique
+  password  String
+  role      Role     @default(CUSTOMER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  cart      Cart?
+  orders    Order[]
+}
+
+enum Role {
+  CUSTOMER
+  ADMIN
+}
+
+model Category {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  image       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  products    Product[]
+  @@index([name])
+}
+
+model Product {
+  id              String    @id @default(uuid())
+  name            String
+  description     String
+  price           Float
+  unit            String
+  image           String
+  gallery         String[]  @default([])
+  stock           Int       @default(0)
+  isAvailable     Boolean   @default(true)
+  featured        Boolean   @default(false)
+  organic         Boolean   @default(false)
+  delivery        Boolean   @default(true)
+  rating          Float     @default(0)
+  reviewCount     Int       @default(0)
+  tags            String[]  @default([])
+  subcategory     String?
+  farmerId        String?
+  categoryId      String
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  category        Category  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  cartItems       CartItem[]
+  orderItems      OrderItem[]
+  @@index([categoryId])
+  @@index([featured])
+  @@index([isAvailable])
+  @@index([subcategory])
+}
+
+model Cart {
+  id        String   @id @default(uuid())
+  userId    String?  @unique
+  sessionId String?  @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items     CartItem[]
+}
+
+model CartItem {
+  id        String   @id @default(uuid())
+  cartId    String
+  productId String
+  quantity  Int      @default(1)
+  price     Float
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  cart      Cart     @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  @@unique([cartId, productId])
+}
+
+model Order {
+  id            String      @id @default(uuid())
+  orderNumber   String      @unique
+  customerName  String
+  phone         String
+  email         String?
+  totalAmount   Float
+  status        OrderStatus @default(PENDING)
+  deliveryFee   Float       @default(0)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  user          User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userId        String?
+  items         OrderItem[]
+  payment       Payment?
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+enum OrderStatus {
+  PENDING
+  PAYMENT_PENDING
+  PAID
+  PROCESSING
+  READY
+  COMPLETED
+  CANCELLED
+}
+
+model OrderItem {
+  id           String   @id @default(uuid())
+  orderId      String
+  productId    String
+  productName  String
+  quantity     Int
+  unitPrice    Float
+  subtotal     Float
+  createdAt    DateTime @default(now())
+  order        Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product      Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  @@index([orderId])
+  @@index([productId])
+}
+
+model Payment {
+  id                     String        @id @default(uuid())
+  orderId                String        @unique
+  amount                 Float
+  phone                  String
+  method                 PaymentMethod @default(MPESA)
+  status                 PaymentStatus @default(PENDING)
+  merchantRequestId      String?
+  checkoutRequestId      String?       @unique
+  mpesaReceiptNumber     String?
+  resultCode             String?
+  resultDescription      String?
+  transactionDate        DateTime?
+  callbackProcessed      Boolean       @default(false)
+  createdAt              DateTime      @default(now())
+  updatedAt              DateTime      @updatedAt
+  order                  Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  @@index([checkoutRequestId])
+  @@index([merchantRequestId])
+  @@index([status])
+}
+
+enum PaymentMethod {
+  MPESA
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  CANCELLED
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  sessionId String   @unique
+  cartId    String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  cart      Cart     @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  @@index([sessionId])
+}
+
+model ContactSubmission {
+  id        String   @id @default(uuid())
+  name      String
+  email     String?
+  phone     String?
+  subject   String
+  message   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([createdAt])
+  @@index([email])
+}
+`;
+
+const schemaPath = path.join(__dirname, 'prisma', 'schema.prisma');
+fs.writeFileSync(schemaPath, schema);
+console.log('Prisma schema written successfully');
