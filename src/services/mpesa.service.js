@@ -22,8 +22,23 @@ const getDarajaUrls = () => {
   return DARAJA_URLS[environment] || DARAJA_URLS.sandbox
 }
 
+const getDarajaTimestamp = () => {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Africa/Nairobi',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date())
+  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]))
+  return `${values.year}${values.month}${values.day}${values.hour}${values.minute}${values.second}`
+}
+
 export const generateStkPassword = (shortcode, passkey) => {
-  const timestamp = new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14)
+  const timestamp = getDarajaTimestamp()
   return Buffer.from(`${shortcode}${timestamp}${passkey}`).toString('base64')
 }
 
@@ -54,9 +69,7 @@ export const getAccessToken = async () => {
   }
 }
 
-const normalizePhoneForDaraja = (phone254) => (
-  phone254.startsWith('254') ? `0${phone254.slice(3)}` : phone254
-)
+const normalizePhoneForDaraja = (phone254) => phone254
 
 export const initiateStkPush = async ({ phone, amount, orderNumber, callbackUrl = null }) => {
   const phoneValidation = validateKenyanPhone(phone)
@@ -69,12 +82,12 @@ export const initiateStkPush = async ({ phone, amount, orderNumber, callbackUrl 
 
   const urls = getDarajaUrls()
   const token = await getAccessToken()
-  const timestamp = new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14)
+  const timestamp = getDarajaTimestamp()
   const payload = {
     BusinessShortCode: config.mpesa.shortcode,
     Password: generateStkPassword(config.mpesa.shortcode, config.mpesa.passkey),
     Timestamp: timestamp,
-    TransactionType: 'CustomerPayBillOnline',
+    TransactionType: config.mpesa.transactionType,
     Amount: Math.round(Number(amount)),
     PartyA: normalizePhoneForDaraja(phoneValidation.normalized),
     PartyB: config.mpesa.shortcode,
@@ -93,11 +106,11 @@ export const initiateStkPush = async ({ phone, amount, orderNumber, callbackUrl 
     })
     const data = response.data || {}
     return {
-      success: data.ResponseCode === '0',
+      success: data.ResponseCode === '0' && Boolean(data.CheckoutRequestID),
       merchantRequestId: data.MerchantRequestId || null,
       checkoutRequestId: data.CheckoutRequestId || null,
       responseCode: data.ResponseCode || null,
-      responseDescription: data.ResponseDescription || 'M-Pesa request accepted',
+      responseDescription: data.ResponseDescription || (data.CheckoutRequestID ? 'M-Pesa request accepted' : 'M-Pesa did not return a checkout request ID.'),
     }
   } catch (error) {
     if (error.response?.status === 401) {

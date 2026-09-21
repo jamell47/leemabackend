@@ -117,7 +117,6 @@ export const createOrder = async ({ customerName, phone, email, items, userId = 
       totalAmount,
       deliveryFee,
       status: 'PAYMENT_PENDING',
-      stockReserved: true,
       userId: userId || null,
       items: {
         create: orderItems.map((item) => ({
@@ -145,41 +144,21 @@ export const createOrder = async ({ customerName, phone, email, items, userId = 
 export const reserveStockForOrder = async (orderId) => {
   const order = await prisma.order.findUnique({ where: { id: orderId }, include: { items: true } })
   if (!order) throw new AppError('Order not found', 404, 'NOT_FOUND')
-  if (order.stockReserved) return order
-
-  await prisma.$transaction(async (tx) => {
-    const current = await tx.order.findUnique({ where: { id: orderId }, include: { items: true } })
-    if (!current || current.stockReserved) return
-    const reservations = await Promise.all(current.items.map((item) =>
-      tx.product.updateMany({
-        where: { id: item.productId, isAvailable: true, stock: { gte: item.quantity } },
-        data: { stock: { decrement: item.quantity } },
-      }),
-    ))
-    if (reservations.some((reservation) => reservation.count !== 1)) {
-      throw new AppError('Stock is no longer available for this order', 409, 'STOCK_CONFLICT')
-    }
-    await tx.order.update({ where: { id: orderId }, data: { stockReserved: true } })
-  })
-
-  return prisma.order.findUnique({ where: { id: orderId }, include: { items: true } })
+  // Stock is decremented atomically while the payment-pending order is created.
+  return order
 }
 
 export const releaseStockForOrder = async (orderId) => {
   const order = await prisma.order.findUnique({ where: { id: orderId }, include: { items: true } })
   if (!order) throw new AppError('Order not found', 404, 'NOT_FOUND')
-  if (!order.stockReserved) return order
 
   await prisma.$transaction(async (tx) => {
-    const current = await tx.order.findUnique({ where: { id: orderId }, include: { items: true } })
-    if (!current || !current.stockReserved) return
-    await Promise.all(current.items.map((item) =>
+    await Promise.all(order.items.map((item) =>
       tx.product.updateMany({
         where: { id: item.productId },
         data: { stock: { increment: item.quantity } },
       }),
     ))
-    await tx.order.update({ where: { id: orderId }, data: { stockReserved: false } })
   })
 
   return prisma.order.findUnique({ where: { id: orderId }, include: { items: true } })

@@ -22,33 +22,27 @@ export const initiatePayment = async ({ orderId, phone, amount, orderNumber }) =
     throw new AppError('Order not found', 404, 'NOT_FOUND')
   }
 
-  // Check if order already has payment
-  if (order.payment) {
-    throw new AppError('Order already has a payment record', 400, 'PAYMENT_EXISTS')
-  }
-
   // Check order status
   if (order.status !== 'PAYMENT_PENDING') {
     throw new AppError('Order is not in payment pending status', 400, 'INVALID_STATUS')
   }
 
-  // Create payment record
-  const payment = await prisma.payment.create({
-    data: {
-      orderId: order.id,
-      amount,
-      phone,
-      method: 'MPESA',
-      status: 'PENDING',
-    },
+  const payment = order.payment || await prisma.payment.create({
+    data: { orderId: order.id, amount, phone, method: 'MPESA', status: 'PENDING' },
   })
 
-  // Initiate STK Push
-  const stkResult = await mpesaService.initiateStkPush({
-    phone,
-    amount,
-    orderNumber,
-  })
+  let stkResult
+  try {
+    stkResult = await mpesaService.initiateStkPush({ phone, amount, orderNumber })
+  } catch (error) {
+    await prisma.payment.update({
+      where: { id: payment.id },
+      data: { status: 'FAILED', resultDescription: error.message },
+    })
+    await orderService.releaseStockForOrder(order.id)
+    await prisma.order.update({ where: { id: order.id }, data: { status: 'CANCELLED' } })
+    throw error
+  }
 
   // Update payment with STK details
   await prisma.payment.update({
@@ -63,6 +57,7 @@ export const initiatePayment = async ({ orderId, phone, amount, orderNumber }) =
 
   // If STK push failed, update order status to CANCELLED
   if (!stkResult.success) {
+    await orderService.releaseStockForOrder(order.id)
     await prisma.order.update({
       where: { id: order.id },
       data: { status: 'CANCELLED' },
@@ -70,7 +65,7 @@ export const initiatePayment = async ({ orderId, phone, amount, orderNumber }) =
   }
 
   return {
-    payment,
+    payment: await prisma.payment.findUnique({ where: { id: payment.id } }),
     stkPush: {
       success: stkResult.success,
       checkoutRequestId: stkResult.checkoutRequestId,
@@ -123,8 +118,6 @@ export const processCallback = async (callbackData) => {
 
   // Update order status based on payment result
   if (statusInfo.paymentStatus === 'SUCCESS') {
-    // Reserve stock on successful payment
-    await orderService.reserveStockForOrder(payment.orderId)
     await prisma.order.update({
       where: { id: payment.orderId },
       data: { status: 'PAID' },

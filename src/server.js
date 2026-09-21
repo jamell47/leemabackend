@@ -31,24 +31,20 @@ const allowedOrigins = (process.env.CORS_ORIGINS || config.frontendUrl)
   .map((origin) => origin.trim())
   .filter(Boolean)
 
-// In development also allow common localhost dev servers
-if (config.nodeEnv !== 'production') {
-  allowedOrigins.push(
-    'http://localhost:5173',
-    'http://localhost:3000',
-    'http://127.0.0.1:5173',
-    'http://127.0.0.1:3000',
-  )
-}
+// In development, reflect any origin (standard dev-server behaviour).
+// In production, enforce a strict whitelist from CORS_ORIGINS / FRONTEND_URL.
+const corsOrigin = config.nodeEnv === 'production'
+  ? (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true)
+      } else {
+        callback(new Error('Not allowed by CORS'))
+      }
+    }
+  : true
 
 const corsOptions = {
-  origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true)
-    } else {
-      callback(new Error('Not allowed by CORS'))
-    }
-  },
+  origin: corsOrigin,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Session-ID'],

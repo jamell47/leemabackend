@@ -48,12 +48,15 @@ export const addToCart = async (req, res, next) => {
     if (product.stock < quantity) throw new AppError('Insufficient stock', 400, 'INSUFFICIENT_STOCK')
 
     const where = userId ? { userId } : { sessionId }
-    let cart = await prisma.cart.findUnique({ where })
+    let cart = await prisma.cart.findUnique({ where, include: { items: true } })
     if (!cart) {
       cart = await prisma.cart.create({ data: { [userId ? 'userId' : 'sessionId']: userId || sessionId } })
     }
 
     const existing = cart.items?.find((i) => i.productId === productId)
+    if (existing && product.stock < existing.quantity + quantity) {
+      throw new AppError('Insufficient stock', 400, 'INSUFFICIENT_STOCK')
+    }
 
     let item
     if (existing) {
@@ -63,8 +66,10 @@ export const addToCart = async (req, res, next) => {
         include: { product: true },
       })
     } else {
-      item = await prisma.cartItem.create({
-        data: { cartId: cart.id, productId, quantity, price: product.price },
+      item = await prisma.cartItem.upsert({
+        where: { cartId_productId: { cartId: cart.id, productId } },
+        create: { cartId: cart.id, productId, quantity, price: product.price },
+        update: { quantity: { increment: quantity } },
         include: { product: true },
       })
     }

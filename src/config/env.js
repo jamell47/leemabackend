@@ -4,10 +4,10 @@ import { fileURLToPath } from 'url'
 
 // Resolve __dirname in ES modules
 const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.resolve(__filename, '..', '..')
+const __dirname = path.dirname(__filename)
 
 // Load .env file
-dotenv.config({ path: path.resolve(__dirname, '.env') })
+dotenv.config({ path: path.resolve(__dirname, '..', '..', '.env') })
 
 // Validate required environment variables
 const requiredEnvVars = [

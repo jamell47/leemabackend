@@ -1,6 +1,7 @@
 import prisma from '../config/prisma.js'
 import { AppError } from '../middleware/error.middleware.js'
 import orderService from '../services/order.service.js'
+import paymentService from '../services/payment.service.js'
 
 export const createOrder = async (req, res, next) => {
   try {
@@ -14,16 +15,22 @@ export const createOrder = async (req, res, next) => {
     const result = await orderService.createOrder({
       customerName, phone, email: email || null, items, userId: userId || null,
     })
+    const paymentResult = await paymentService.initiatePayment({
+      orderId: result.order.id,
+      phone: result.order.phone,
+      amount: result.order.totalAmount,
+      orderNumber: result.order.orderNumber,
+    })
 
     res.status(201).json({
       success: true,
-      message: result.payment.status === 'FAILED'
+      message: paymentResult.payment.status === 'FAILED'
         ? 'Failed to initiate payment. Please try again.'
         : 'Order created. M-Pesa prompt sent to your phone.',
       data: {
         order: { id: result.order.id, orderNumber: result.order.orderNumber, status: result.order.status, totalAmount: result.order.totalAmount, customerName: result.order.customerName, phone: result.order.phone },
-        payment: { id: result.payment.id, status: result.payment.status, checkoutRequestId: result.payment.checkoutRequestId },
-        message: result.payment.status === 'FAILED' ? 'Failed to initiate M-Pesa payment. Please try again.' : 'M-Pesa prompt sent. Please enter your PIN to complete payment.',
+        payment: { id: paymentResult.payment.id, status: paymentResult.payment.status, checkoutRequestId: paymentResult.payment.checkoutRequestId },
+        message: paymentResult.payment.status === 'FAILED' ? 'Failed to initiate M-Pesa payment. Please try again.' : 'M-Pesa prompt sent. Please enter your PIN to complete payment.',
       },
     })
   } catch (error) { next(error) }
