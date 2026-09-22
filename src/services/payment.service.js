@@ -31,10 +31,22 @@ export const initiatePayment = async ({ orderId, phone, amount, orderNumber }) =
     data: { orderId: order.id, amount, phone, method: 'MPESA', status: 'PENDING' },
   })
 
+  console.log('[Payment Service] === Initiating payment ===')
+  console.log(`[Payment Service] Order ID:     ${order.id}`)
+  console.log(`[Payment Service] Order Number: ${order.orderNumber}`)
+  console.log(`[Payment Service] Order Status: ${order.status}`)
+  console.log(`[Payment Service] Payment ID:   ${payment.id}`)
+  console.log(`[Payment Service] Payment Status: ${payment.status}`)
+  console.log(`[Payment Service] Amount:       ${amount}`)
+  console.log(`[Payment Service] Phone:        ${phone.replace(/(\d{2})\d{6}(\d{4})/, '$1******$2')}`)
+
   let stkResult
   try {
     stkResult = await mpesaService.initiateStkPush({ phone, amount, orderNumber })
   } catch (error) {
+    console.error('[Payment Service] === STK Push initiation FAILED ===')
+    console.error(`[Payment Service] Error: ${error.message}`)
+
     await prisma.payment.update({
       where: { id: payment.id },
       data: { status: 'FAILED', resultDescription: error.message },
@@ -45,23 +57,35 @@ export const initiatePayment = async ({ orderId, phone, amount, orderNumber }) =
   }
 
   // Update payment with STK details
+  const newStatus = stkResult.success ? 'PENDING' : 'FAILED'
   await prisma.payment.update({
     where: { id: payment.id },
     data: {
       merchantRequestId: stkResult.merchantRequestId,
       checkoutRequestId: stkResult.checkoutRequestId,
-      status: stkResult.success ? 'PENDING' : 'FAILED',
+      status: newStatus,
       resultDescription: stkResult.responseDescription,
     },
   })
 
-  // If STK push failed, update order status to CANCELLED
+  console.log('[Payment Service] === Payment record updated with STK details ===')
+  console.log(`[Payment Service] STK success:     ${stkResult.success}`)
+  console.log(`[Payment Service] merchantRequestId: ${stkResult.merchantRequestId || 'NOT SET'}`)
+  console.log(`[Payment Service] checkoutRequestId: ${stkResult.checkoutRequestId || 'NOT SET'}`)
+  console.log(`[Payment Service] responseCode:    ${stkResult.responseCode || 'NOT SET'}`)
+  console.log(`[Payment Service] New payment status: ${newStatus}`)
+
+  // If STK push failed, release stock and cancel order
   if (!stkResult.success) {
+    console.error('[Payment Service] === STK Push failed — releasing stock and cancelling order ===')
     await orderService.releaseStockForOrder(order.id)
     await prisma.order.update({
       where: { id: order.id },
       data: { status: 'CANCELLED' },
     })
+    console.error('[Payment Service] Order status updated to: CANCELLED')
+  } else {
+    console.log('[Payment Service] STK Push accepted by Daraja — awaiting callback. Payment stays PENDING.')
   }
 
   return {
@@ -81,6 +105,12 @@ export const initiatePayment = async ({ orderId, phone, amount, orderNumber }) =
 export const processCallback = async (callbackData) => {
   const { checkoutRequestId, merchantRequestId } = callbackData
 
+  console.log('[Payment Service] === Processing callback ===')
+  console.log(`[Payment Service] checkoutRequestId: ${checkoutRequestId || 'NOT SET'}`)
+  console.log(`[Payment Service] merchantRequestId:  ${merchantRequestId || 'NOT SET'}`)
+  console.log(`[Payment Service] resultCode:         ${callbackData.resultCode || 'NOT SET'}`)
+  console.log(`[Payment Service] resultDescription:  ${callbackData.resultDescription}`)
+
   // Find payment by checkoutRequestId or merchantRequestId
   const payment = await prisma.payment.findFirst({
     where: {
@@ -94,14 +124,25 @@ export const processCallback = async (callbackData) => {
   })
 
   if (!payment) {
-    // Callback for unknown transaction - log but don't error
-    console.log('Callback for unknown transaction:', { checkoutRequestId, merchantRequestId })
+    // Callback for unknown transaction or duplicate callback — log but don't error
+    console.log('[Payment Service] Callback for unknown/duplicate transaction — already processed or not found.')
     return { processed: false, message: 'Payment not found' }
   }
+
+  console.log('[Payment Service] Payment found:')
+  console.log(`[Payment Service]   Payment ID:  ${payment.id}`)
+  console.log(`[Payment Service]   Order ID:    ${payment.orderId}`)
+  console.log(`[Payment Service]   Current status: ${payment.status}`)
+  console.log(`[Payment Service]   callbackProcessed: ${payment.callbackProcessed}`)
 
   // Parse callback and determine status
   const { getCallbackStatus } = await import('./mpesa.service.js')
   const statusInfo = getCallbackStatus(callbackData)
+
+  console.log('[Payment Service] Determined status:')
+  console.log(`[Payment Service]   paymentStatus: ${statusInfo.paymentStatus}`)
+  console.log(`[Payment Service]   orderStatus:   ${statusInfo.orderStatus}`)
+  console.log(`[Payment Service]   message:       ${statusInfo.message}`)
 
   // Update payment
   await prisma.payment.update({
@@ -116,20 +157,30 @@ export const processCallback = async (callbackData) => {
     },
   })
 
+  console.log('[Payment Service] === Payment updated ===')
+  console.log(`[Payment Service]   New payment status: ${statusInfo.paymentStatus}`)
+  console.log(`[Payment Service]   callbackProcessed: true`)
+
   // Update order status based on payment result
   if (statusInfo.paymentStatus === 'SUCCESS') {
     await prisma.order.update({
       where: { id: payment.orderId },
       data: { status: 'PAID' },
     })
+    console.log('[Payment Service] Order status updated to: PAID (stock NOT restored)')
   } else if (statusInfo.paymentStatus === 'FAILED' || statusInfo.paymentStatus === 'CANCELLED') {
-    // Release stock (if any was reserved) and cancel order
+    // Release stock (if any was reserved) and cancel order — but only if
+    // the order hasn't already been cancelled (idempotency guard)
     if (payment.order.status === 'PAYMENT_PENDING' || payment.order.status === 'PAID') {
+      console.log('[Payment Service] === Payment failed/cancelled — releasing stock ===')
       await orderService.releaseStockForOrder(payment.orderId)
       await prisma.order.update({
         where: { id: payment.orderId },
         data: { status: 'CANCELLED' },
       })
+      console.log('[Payment Service] Order status updated to: CANCELLED (stock restored)')
+    } else {
+      console.log(`[Payment Service] Order already ${payment.order.status} — stock not touched (idempotent).`)
     }
   }
 
